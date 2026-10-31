@@ -22,7 +22,12 @@ echo "==> TrTree ${VER} (${BUILD})"
 mkdir -p dist packaging/app/server
 
 echo "==> generating icons"
-python3 scripts/gen_icons.py >/dev/null
+if python3 -c 'import PIL' >/dev/null 2>&1; then
+  python3 scripts/gen_icons.py >/dev/null
+else
+  # 图标已随仓库提交；缺少 Pillow 时沿用仓库内的版本即可
+  echo "    (Pillow 不可用，使用仓库中已有的图标)"
+fi
 
 echo "==> building linux/amd64"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "$GO" build -trimpath \

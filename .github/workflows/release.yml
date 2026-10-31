@@ -1,0 +1,98 @@
+name: release
+
+# 打 tag（v1.1.2 之类）时自动构建双架构 .fpk 并发布到 Releases。
+# 用的是仓库自带的 GITHUB_TOKEN，无需额外 secret。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v1.1.2），需已存在'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装 Pillow（生成图标）
+        run: python3 -m pip install --quiet pillow
+
+      - name: Verify tests
+        run: |
+          go vet ./...
+          go test ./... -count=1
+
+      - name: Build frontend-embedded binaries
+        run: bash scripts/build.sh
+
+      - name: Package .fpk
+        run: bash scripts/pack.sh
+
+      - name: Show artifact
+        run: |
+          ls -lh dist/
+          tar xzOf dist/trtree-*.fpk manifest | head -30
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./*.fpk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: TrTree ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          body: |
+            ## 安装
+
+            1. 下载下方 `trtree-<版本>.fpk`
+            2. fnOS 应用中心 → 手动安装，选择该文件
+            3. 安装完成后在应用中心**启动**（首次安装后可能需要「停止 → 启动」一次）
+            4. 从桌面图标打开 TrTree
+
+            > 需要 fnOS 1.2.0401+，仅管理员可用（要遍历全盘目录）。
+
+            ## 校验
+
+            对照 `SHA256SUMS.txt` 校验下载的安装包。
+
+            ## 说明
+
+            - 安装包同时包含 `amd64` 与 `arm64` 二进制，安装时按 CPU 自动选择
+            - 卸载会同时删除 `/vol1/@appdata/trtree` 下的扫描历史
+          files: |
+            dist/*.fpk
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true

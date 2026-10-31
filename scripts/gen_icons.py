@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate WizT icons (RGBA, fnOS 18.75% corner radius) with pure PIL."""
+"""Generate TrTree icons (RGBA, fnOS 18.75% corner radius) with pure PIL."""
 import os
 from PIL import Image, ImageDraw
 

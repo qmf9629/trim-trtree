@@ -1,7 +1,14 @@
 # TrTree · fnOS 磁盘空间分析
 
+[![ci](https://github.com/qmf9629/trim-trtree/actions/workflows/ci.yml/badge.svg)](https://github.com/qmf9629/trim-trtree/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/qmf9629/trim-trtree)](https://github.com/qmf9629/trim-trtree/releases)
+[![license](https://img.shields.io/github/license/qmf9629/trim-trtree)](LICENSE)
+
 像 Windows 上的 **WizTree** 一样，快速看清 fnOS 存储空间里每个目录、每种文件占用了多少空间。
 纯原生 Go + HTML/CSS/JS 实现，无 Node/Python 运行时依赖，安装包同时支持 x86_64 与 arm64。
+
+- 仓库：<https://github.com/qmf9629/trim-trtree>
+- 下载：<https://github.com/qmf9629/trim-trtree/releases>
 
 ![空状态](docs/screenshots/empty.png)
 
@@ -34,9 +41,13 @@
 
 ## 安装
 
-1. 获取构建产物 `dist/trtree-1.0.2.fpk`（或自行执行 `bash scripts/pack.sh` 生成）。
-2. 打开 fnOS **应用中心 → 手动安装**，选择 fpk 文件并安装。
-3. 安装完成后启动 **TrTree 磁盘分析**，从桌面图标或应用中心打开。
+从 [Releases](https://github.com/qmf9629/trim-trtree/releases) 下载最新的 `trtree-<版本>.fpk`：
+
+1. 打开 fnOS **应用中心 → 手动安装**，选择下载的 fpk 文件。
+2. 安装完成后在应用中心**启动**（若首次安装后点图标打不开，执行「停止 → 启动」一次）。
+3. 从桌面图标或应用中心打开 **TrTree 磁盘分析**。
+
+也可以自行构建：`bash scripts/pack.sh` 会生成 `dist/trtree-<版本>.fpk`。
 
 > 需要 fnOS `1.2.0401` 及以上版本，仅管理员可见/可用。
 > 覆盖安装同一应用时，如果应用中心没有触发升级，请先卸载旧版本再安装新版本；扫描历史保存在应用数据目录，通常卸载后仍会保留，但内存中的扫描结果需要重新分析。
@@ -81,6 +92,17 @@ bash scripts/pack.sh         # dist/trtree-1.0.2.fpk
 
 本地开发模式默认 `TRTREE_ALLOW_ALL=1`，不需要 fnOS 网关注入管理员头；生产环境由网关传递
 `X-Trim-Userid` / `X-Trim-Isadmin`，应用只接受管理员请求。
+
+打包默认优先使用官方 `fnpack`（放在 `.tools/fnpack` 或 PATH 中）；
+没有时自动退回纯 Python 打包器 `scripts/fpk.py`，产物结构、权限与 manifest
+`checksum` 均等价，已在实际 fnOS 设备上验证可正常安装启动。
+
+发布：打 `v*` tag 会触发 `.github/workflows/release.yml`，自动构建双架构 fpk
+并创建 Release 附带安装包与 `SHA256SUMS.txt`。
+
+```bash
+git tag v1.1.2 && git push origin v1.1.2
+```
 
 ### 目录结构
 

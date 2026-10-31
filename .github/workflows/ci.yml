@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1 -race
+
+      - name: 前端语法检查
+        run: |
+          for f in src/web/js/*.js tools/*.js; do
+            node --input-type=module --check < "$f" || { echo "BAD $f"; exit 1; }
+          done
+
+      - name: Shell 语法检查
+        run: |
+          for f in scripts/*.sh packaging/cmd/*; do
+            bash -n "$f" || { echo "BAD $f"; exit 1; }
+          done
+
+      - name: 构建并打包（验证 fpk 可产出）
+        run: |
+          bash scripts/build.sh
+          bash scripts/pack.sh
+          tar xzOf dist/trtree-*.fpk manifest | grep -E '^(appname|version|checksum)'

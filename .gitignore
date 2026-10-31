@@ -1,0 +1,7 @@
+dist/
+.devdata/
+node_modules/
+.tools/
+package-lock.json
+*.fpk
+packaging/app/server/

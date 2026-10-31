@@ -1,0 +1,7 @@
+#!/bin/bash
+# Ensure bundled binaries are executable after installation.
+set -u
+for dir in "${TRIM_APPDEST:-}" "${TRIM_APPDEST:-}/target"; do
+    [ -d "${dir}/server" ] && chmod 0755 "${dir}"/server/trtree-linux-* 2>/dev/null
+done
+exit 0

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Stop the service before uninstalling.
+set -u
+if [ -x "${TRIM_APPDEST:-}/cmd/main" ]; then
+    "${TRIM_APPDEST}/cmd/main" stop >>"${TRIM_PKGVAR:-/tmp}/app.log" 2>&1 || true
+fi
+exit 0

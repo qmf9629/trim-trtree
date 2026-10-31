@@ -1,0 +1,38 @@
+{
+  "name": "trim-trtree",
+  "version": "1.1.2",
+  "description": "TrTree — fnOS 原生磁盘空间分析工具（类似 WizTree 的树状图分析）",
+  "private": true,
+  "license": "MIT",
+  "author": "qmf9629 (https://github.com/qmf9629)",
+  "homepage": "https://github.com/qmf9629/trim-trtree",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qmf9629/trim-trtree.git"
+  },
+  "bugs": {
+    "url": "https://github.com/qmf9629/trim-trtree/issues"
+  },
+  "keywords": [
+    "fnos",
+    "fnos-app",
+    "disk-space",
+    "treemap",
+    "wiztree"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "pack": "bash scripts/pack.sh",
+    "dev": "bash scripts/dev.sh",
+    "test": "bash scripts/test.sh",
+    "icons": "python3 scripts/gen_icons.py",
+    "shot": "node tools/screenshot.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  },
+  "dependencies": {}
+}

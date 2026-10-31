@@ -1,0 +1,7 @@
+# 生命周期脚本、shell 脚本必须保持 LF，否则 fnOS 上无法执行
+* text=auto eol=lf
+*.sh text eol=lf
+packaging/cmd/* text eol=lf
+*.png binary
+*.PNG binary
+*.fpk binary

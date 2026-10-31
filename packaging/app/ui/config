@@ -1,0 +1,17 @@
+{
+    ".url": {
+        "trtree.Application": {
+            "title": "TrTree 磁盘分析",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "",
+            "gatewayPrefix": "/app/trtree",
+            "gatewaySocket": "app.sock",
+            "url": "/app/trtree",
+            "allUsers": false,
+            "control": {
+                "accessPerm": "editable"
+            }
+        }
+    }
+}

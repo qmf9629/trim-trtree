@@ -1,0 +1,194 @@
+#!/bin/bash
+# WizT lifecycle script: start / stop / status / restart
+set -u
+
+APP_NAME="trtree"
+PKG_VAR="${TRIM_PKGVAR:-}"
+APPDEST="${TRIM_APPDEST:-}"
+if [ -z "$APPDEST" ]; then
+    APPDEST="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+if [ -z "$PKG_VAR" ]; then
+    PKG_VAR="${APPDEST}/var"
+fi
+mkdir -p "$PKG_VAR" 2>/dev/null
+
+LOG_FILE="${PKG_VAR}/app.log"
+PID_FILE="${PKG_VAR}/app.pid"
+GATEWAY_PREFIX="/app/trtree"
+
+# Resolve the bundled server directory across fnOS layouts.
+SRC=""
+if [ -d "${APPDEST}/server" ]; then
+    SRC="${APPDEST}/server"
+elif [ -d "${APPDEST}/target/server" ]; then
+    SRC="${APPDEST}/target/server"
+fi
+
+# Pick the binary for this CPU architecture.
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64 | amd64) BIN_NAME="trtree-linux-amd64" ;;
+    aarch64 | arm64) BIN_NAME="trtree-linux-arm64" ;;
+    *) BIN_NAME="trtree-linux-amd64" ;;
+esac
+BIN="${SRC}/${BIN_NAME}"
+if [ ! -f "$BIN" ] && [ -n "$SRC" ]; then
+    BIN="$(ls "$SRC"/trtree-linux-* 2>/dev/null | head -n 1)"
+fi
+
+# The gateway socket lives in the installed target dir. Depending on the fnOS
+# version TRIM_APPDEST already points there, or it points at /var/apps/<app>
+# whose `target` symlink resolves to it.
+SOCKET=""
+for cand in "${APPDEST}/app.sock" "${APPDEST}/target/app.sock"; do
+    if [ -S "$cand" ]; then
+        SOCKET="$cand"
+        break
+    fi
+done
+if [ -z "$SOCKET" ]; then
+    if [ -d "${APPDEST}/target" ] && [ ! -d "${APPDEST}/server" ]; then
+        SOCKET="${APPDEST}/target/app.sock"
+    else
+        SOCKET="${APPDEST}/app.sock"
+    fi
+fi
+
+log_msg() {
+    printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE" 2>/dev/null
+}
+
+rotate_log() {
+    if [ -f "$LOG_FILE" ]; then
+        size=$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "${size:-0}" -gt 5242880 ]; then
+            mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+        fi
+    fi
+}
+
+pid_alive() {
+    [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+}
+
+health_ok() {
+    local cand
+    for cand in "$SOCKET" "${APPDEST}/app.sock" "${APPDEST}/target/app.sock"; do
+        [ -S "$cand" ] || continue
+        if command -v curl >/dev/null 2>&1; then
+            if curl -sf --max-time 2 --unix-socket "$cand" http://localhost/api/health >/dev/null 2>&1; then
+                SOCKET="$cand"
+                return 0
+            fi
+        else
+            SOCKET="$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+status_app() {
+    local pid=""
+    if [ -f "$PID_FILE" ]; then
+        pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+        if pid_alive "$pid" && health_ok; then
+            return 0
+        fi
+    fi
+    # Fallback: our own binary still running (e.g. stale PID file).
+    if pgrep -f "server/trtree-linux-" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+start_app() {
+    if status_app; then
+        log_msg "already running"
+        return 0
+    fi
+    if [ -z "$SRC" ] || [ ! -f "$BIN" ]; then
+        log_msg "ERROR: server binary not found (SRC=${SRC:-none}, BIN=${BIN:-none})"
+        return 1
+    fi
+    chmod 0755 "$BIN" 2>/dev/null
+    rm -f "$SOCKET" 2>/dev/null
+    rotate_log
+    cd "$SRC" || return 1
+
+    SHARE="${TRIM_DATA_SHARE_PATHS:-}"
+    SHARE="${SHARE%%:*}"
+    log_msg "starting ${BIN} (arch=${ARCH}, data=${PKG_VAR}, share=${SHARE:-none})"
+    TRTREE_DATA_DIR="$PKG_VAR" \
+        TRTREE_SHARE_DIR="$SHARE" \
+        TRTREE_SOCKET="$SOCKET" \
+        TRTREE_GATEWAY_PREFIX="$GATEWAY_PREFIX" \
+        setsid "$BIN" >>"$LOG_FILE" 2>&1 </dev/null &
+    local pid=$!
+    printf '%s' "$pid" >"$PID_FILE"
+
+    local i
+    for i in $(seq 1 40); do
+        if health_ok; then
+            log_msg "started ok (pid=${pid})"
+            return 0
+        fi
+        if ! pid_alive "$pid"; then
+            log_msg "ERROR: process exited during startup"
+            break
+        fi
+        sleep 0.25
+    done
+    log_msg "ERROR: start timeout, see ${LOG_FILE}"
+    return 1
+}
+
+stop_app() {
+    local pid=""
+    if [ -f "$PID_FILE" ]; then
+        pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+    fi
+    if pid_alive "$pid"; then
+        log_msg "stopping pid=${pid}"
+        kill -TERM "$pid" 2>/dev/null || true
+        local i
+        for i in $(seq 1 20); do
+            pid_alive "$pid" || break
+            sleep 0.5
+        done
+        if pid_alive "$pid"; then
+            log_msg "force killing pid=${pid}"
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    pkill -f "server/trtree-linux-" 2>/dev/null || true
+    rm -f "$PID_FILE" "$SOCKET" 2>/dev/null
+    log_msg "stopped"
+    return 0
+}
+
+case "${1:-}" in
+start)
+    start_app
+    ;;
+stop)
+    stop_app
+    ;;
+restart)
+    stop_app
+    start_app
+    ;;
+status)
+    if status_app; then
+        exit 0
+    else
+        exit 3
+    fi
+    ;;
+*)
+    echo "usage: $0 {start|stop|restart|status}" >&2
+    exit 1
+    ;;
+esac

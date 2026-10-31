@@ -1,0 +1,3 @@
+#!/bin/bash
+# no-op: all files are bundled by fnpack
+exit 0

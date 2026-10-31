@@ -177,6 +177,30 @@ func TestScanLifecycle(t *testing.T) {
 		t.Fatalf("expected file grandchild, got %+v", tree2.Children[0].Children[0])
 	}
 
+	var tm struct {
+		Node     NodeDTO       `json:"node"`
+		Children []TreemapNode `json:"children"`
+		Nodes    int           `json:"nodes"`
+	}
+	getJSON(t, ts.URL+"/api/scans/"+start.ID+"/treemap?node=0&area=200000", &tm)
+	if tm.Node.Size != 6100 || len(tm.Children) != 3 || tm.Nodes != 5 {
+		t.Fatalf("treemap root = %+v children=%d nodes=%d", tm.Node, len(tm.Children), tm.Nodes)
+	}
+	if tm.Children[0].Name != "videos" || len(tm.Children[0].Children) != 1 ||
+		tm.Children[0].Children[0].Name != "movie.mp4" || tm.Children[0].Children[0].Ext != "mp4" {
+		t.Fatalf("treemap nesting = %+v", tm.Children[0])
+	}
+
+	// 预算只够 3 个节点时只展开第一层
+	var tmSmall struct {
+		Children  []TreemapNode `json:"children"`
+		BudgetHit bool          `json:"budgetHit"`
+	}
+	getJSON(t, ts.URL+"/api/scans/"+start.ID+"/treemap?node=0&budget=3", &tmSmall)
+	if len(tmSmall.Children) != 3 || len(tmSmall.Children[0].Children) != 0 || !tmSmall.BudgetHit {
+		t.Fatalf("treemap budget = %+v", tmSmall)
+	}
+
 	var jsonResp struct {
 		Root       NodeDTO   `json:"root"`
 		Children   []NodeDTO `json:"children"`

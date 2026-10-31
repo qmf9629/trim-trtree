@@ -69,6 +69,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/scans/{id}/cancel", s.handleCancelScan)
 	m.HandleFunc("GET /api/scans/{id}/progress", s.handleProgress)
 	m.HandleFunc("GET /api/scans/{id}/tree", s.handleTree)
+	m.HandleFunc("GET /api/scans/{id}/treemap", s.handleTreemap)
 	m.HandleFunc("GET /api/scans/{id}/children", s.handleChildren)
 	m.HandleFunc("GET /api/scans/{id}/search", s.handleSearch)
 	m.HandleFunc("GET /api/scans/{id}/top", s.handleTop)

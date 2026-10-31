@@ -7,11 +7,14 @@
 
 import { api } from './api.js';
 import { openFileManager as hostOpenFileManager, hostAvailable } from './host.js';
-import { TreemapView } from './treemap.js';
+import { TreemapView, extColor } from './treemap.js';
+import {
+  getTheme, setThemeMode, setThemeSeed, onThemeChange, SEED_PRESETS,
+} from './theme.js';
 import { VirtualTable } from './table.js';
 import {
   el, clear, icon, formatBytes, formatNumber, formatPercent, formatTime,
-  formatRelative, formatDuration, ratio, colorForKey, colorForExt,
+  formatRelative, formatDuration, ratio,
   iconForType, statusText, debounce, clamp, extLabel,
 } from './format.js';
 
@@ -31,6 +34,8 @@ const dom = {
   statusPill: $('status-pill'),
   statusText: $('status-text'),
   homeBtn: $('home-btn'),
+  themeBtn: $('theme-btn'),
+  themeMenu: $('theme-menu'),
   brandHome: $('brand-home'),
 
   viewEmpty: $('view-empty'),
@@ -159,6 +164,8 @@ const state = {
   total: 0,
   truncated: false,
   selection: null,
+  tmArea: 0,
+  tmSeq: 0,
 
   list: { q: '', kind: 'all', sort: 'size', dir: 'desc', total: 0, seq: 0 },
   tab: 'files',
@@ -926,7 +933,11 @@ async function loadTree(nodeId, opts = {}) {
   const id = nodeId || 0;
   const seq = ++state.loadSeq;
   try {
-    const data = await api.tree(state.scanId, { node: id, depth: 1, limit: 5000 });
+    const area = treemap ? Math.round(treemap.getArea()) : 0;
+    const [data, nested] = await Promise.all([
+      api.tree(state.scanId, { node: id, depth: 1, limit: 5000 }),
+      fetchTreemap(id, area),
+    ]);
     if (seq !== state.loadSeq) return;
     const node = data.node || null;
     if (!node) {
@@ -943,12 +954,7 @@ async function loadTree(nodeId, opts = {}) {
     state.selection = null;
 
     if (treemap) {
-      treemap.setData({
-        node,
-        children: state.children,
-        total: state.total,
-        truncated: state.truncated,
-      });
+      applyTreemapData(node, nested);
       treemap.setSelected(null);
     }
 
@@ -972,6 +978,57 @@ async function loadTree(nodeId, opts = {}) {
     toast('加载目录失败：' + err.message, 'error', 5200);
   }
 }
+
+/** 嵌套 treemap 数据；失败时返回 null，由调用方退回单层显示 */
+async function fetchTreemap(nodeId, area) {
+  if (!state.scanId) return null;
+  try {
+    const params = { node: nodeId, budget: 16000 };
+    if (area > 0) params.area = area;
+    const res = await api.treemap(state.scanId, params);
+    state.tmArea = area;
+    return res;
+  } catch (_) {
+    return null;
+  }
+}
+
+function applyTreemapData(node, nested, opts = {}) {
+  if (!treemap) return;
+  if (nested && Array.isArray(nested.children)) {
+    treemap.setData({
+      node,
+      children: nested.children,
+      total: state.total,
+      hidden: nested.hidden || 0,
+      truncated: !!nested.budgetHit,
+    }, opts);
+  } else {
+    treemap.setData({
+      node,
+      children: state.children,
+      total: state.total,
+      truncated: state.truncated,
+    }, opts);
+  }
+}
+
+/** 画布尺寸变化较大时重新请求合适精度的嵌套数据 */
+const refetchTreemapOnResize = debounce(async () => {
+  if (!treemap || !state.scanId || !state.node || state.phase !== 'result') return;
+  const area = Math.round(treemap.getArea());
+  if (!area || !state.tmArea) return;
+  const r = area / state.tmArea;
+  if (r > 0.6 && r < 1.6) return;
+  const seq = ++state.tmSeq;
+  const loadSeq = state.loadSeq;
+  const node = state.node;
+  const nested = await fetchTreemap(node.id, area);
+  if (seq !== state.tmSeq || loadSeq !== state.loadSeq || !nested) return;
+  applyTreemapData(node, nested, { preserve: true });
+  if (state.selection) treemap.setSelected(state.selection.id);
+  renderTreemapOverlay();
+}, 450);
 
 function renderCrumbs() {
   const node = state.node;
@@ -1028,7 +1085,7 @@ function renderNodeCard() {
 
   const title = el('div', 'node-title');
   const ic = icon(iconForType(n));
-  ic.style.color = n.type === 'dir' ? '#7db2ff' : 'var(--text-2)';
+  ic.style.color = n.type === 'dir' ? 'var(--md-primary)' : 'var(--md-on-surface-variant)';
   title.appendChild(ic);
   const nameEl = el('span', 'node-name', n.name || n.path || '—');
   nameEl.title = n.path || '';
@@ -1187,7 +1244,7 @@ function renderExtensions() {
   for (const it of rows) {
     const isOther = it.ext === '__other__';
     const ext = it.ext || '';
-    const color = isOther ? '#475569' : colorForExt(ext, 'file');
+    const color = isOther ? 'var(--md-outline)' : extColor(ext, 'file');
     const pct = ratio(it.size, total);
     const row = el('button', 'ext-row');
     row.type = 'button';
@@ -1255,14 +1312,14 @@ function renderTreemapOverlay() {
   if (!node) return;
   setText(dom.tmTitle, node.name || node.path || '—');
   const childCount = Number.isFinite(Number(node.childCount)) ? Number(node.childCount) : state.children.length;
-  setText(dom.tmMeta, `${formatNumber(childCount)} 个子项 · 按大小排序`);
+  setText(dom.tmMeta, `${formatNumber(childCount)} 个子项 · ${formatBytes(node.size)}`);
   const shown = treemap ? treemap.getShownCount() : Math.min(state.children.length, 4000);
+  const tiles = treemap ? treemap.getTileCount() : shown;
   const total = state.total || state.children.length;
-  if (state.children.length > shown || state.truncated || total > shown) {
-    setText(dom.tmCount, `前 ${formatNumber(shown)} 项 / 共 ${formatNumber(total)} 项`);
-  } else {
-    setText(dom.tmCount, `${formatNumber(total)} 项`);
-  }
+  const parts = [];
+  parts.push(total > shown ? `第一层 ${formatNumber(shown)} / ${formatNumber(total)} 项` : `${formatNumber(total)} 项`);
+  if (tiles > shown) parts.push(`嵌套 ${formatNumber(tiles)} 块`);
+  setText(dom.tmCount, parts.join(' · '));
 }
 
 function renderStatusbar() {
@@ -1362,11 +1419,11 @@ function ensureTables() {
 function renderNameCell(node, cell) {
   cell.classList.add('name-cell');
   const bar = el('span', 'name-bar');
-  bar.style.background = colorForKey(node.name, node.type, node.ext);
+  bar.style.background = extColor(node.ext, node.type);
   cell.appendChild(bar);
   const ic = icon(iconForType(node));
-  if (node.type === 'dir') ic.style.color = '#7db2ff';
-  else if (node.type === 'link') ic.style.color = '#fbbf24';
+  if (node.type === 'dir') ic.style.color = 'var(--md-primary)';
+  else if (node.type === 'link') ic.style.color = 'var(--md-warn)';
   cell.appendChild(ic);
   const txt = el('span', 'name-text', node.name || node.path || '—');
   cell.appendChild(txt);
@@ -2379,6 +2436,92 @@ function bootstrapTreemap() {
     onOpen: handleTreemapOpen,
     onOpenFile: handleTreemapOpenFile,
   });
+  new ResizeObserver(() => refetchTreemapOnResize()).observe(dom.treemap.parentElement || dom.treemap);
+}
+
+/* ------------------------------------------------------------------ */
+/* 主题（Material You 动态配色）                                         */
+/* ------------------------------------------------------------------ */
+
+const THEME_MODES = [
+  { mode: 'system', label: '跟随系统', icon: 'monitor' },
+  { mode: 'light', label: '浅色', icon: 'sun' },
+  { mode: 'dark', label: '深色', icon: 'moon' },
+];
+
+function renderThemeMenu() {
+  const menu = dom.themeMenu;
+  if (!menu) return;
+  clear(menu);
+  const t = getTheme();
+
+  menu.appendChild(el('div', 'menu-label', '外观'));
+  const seg = el('div', 'segmented');
+  seg.setAttribute('role', 'radiogroup');
+  for (const m of THEME_MODES) {
+    const b = el('button', 'seg-btn' + (t.mode === m.mode ? ' on' : ''));
+    b.type = 'button';
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(t.mode === m.mode));
+    if (t.mode === m.mode) b.appendChild(icon('check'));
+    else b.appendChild(icon(m.icon));
+    b.appendChild(el('span', '', m.label));
+    b.addEventListener('click', () => setThemeMode(m.mode));
+    seg.appendChild(b);
+  }
+  menu.appendChild(seg);
+
+  menu.appendChild(el('div', 'menu-label', '主题色'));
+  const sw = el('div', 'swatches');
+  for (const p of SEED_PRESETS) {
+    const b = el('button', 'swatch' + (t.seed === p.hex ? ' on' : ''));
+    b.type = 'button';
+    b.title = p.name;
+    b.setAttribute('aria-label', '主题色：' + p.name);
+    b.style.setProperty('--sw', p.hex);
+    if (t.seed === p.hex) b.appendChild(icon('check'));
+    b.addEventListener('click', () => setThemeSeed(p.hex));
+    sw.appendChild(b);
+  }
+  const custom = el('label', 'swatch swatch-custom' + (SEED_PRESETS.some((p) => p.hex === t.seed) ? '' : ' on'));
+  custom.title = '自定义颜色';
+  custom.style.setProperty('--sw', t.seed);
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = t.seed;
+  input.setAttribute('aria-label', '自定义主题色');
+  input.addEventListener('input', debounce(() => setThemeSeed(input.value), 60));
+  custom.appendChild(icon('palette'));
+  custom.appendChild(input);
+  sw.appendChild(custom);
+  menu.appendChild(sw);
+}
+
+function bindTheme() {
+  if (!dom.themeBtn || !dom.themeMenu) return;
+  const close = () => {
+    dom.themeMenu.hidden = true;
+    dom.themeBtn.setAttribute('aria-expanded', 'false');
+  };
+  dom.themeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = dom.themeMenu.hidden;
+    if (open) renderThemeMenu();
+    dom.themeMenu.hidden = !open;
+    dom.themeBtn.setAttribute('aria-expanded', String(open));
+  });
+  dom.themeMenu.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', close);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  onThemeChange(() => {
+    if (!dom.themeMenu.hidden) renderThemeMenu();
+    if (treemap) treemap.refreshTheme();
+    if (state.phase === 'result') {
+      renderExtensions();
+      renderTopChildren();
+      for (const t of Object.values(tables)) if (t) t._render(true);
+    }
+  });
 }
 
 function startDemoScanning() {
@@ -2408,6 +2551,7 @@ function startDemoScanning() {
 }
 
 // 启动
+bindTheme();
 try {
   bootstrapTreemap();
 } catch (err) {

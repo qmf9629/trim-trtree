@@ -1,6 +1,6 @@
 {
   "name": "trim-trtree",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "description": "TrTree — fnOS 原生磁盘空间分析工具（类似 WizTree 的树状图分析）",
   "private": true,
   "license": "MIT",

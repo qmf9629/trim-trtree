@@ -9,12 +9,13 @@
 ```
 src/web/
 ├── index.html          # 页面骨架 + SVG 图标 sprite（内联）
-├── css/app.css         # 全部样式（CSS 变量、暗色主题、响应式）
+├── css/app.css         # 全部样式（M3 token、浅色/深色、响应式）
 └── js/
     ├── api.js          # API 封装（统一错误、轮询）
     ├── host.js         # fnOS 桌面壳桥接（openFileManager/openFile 等，Trim App 协议）
     ├── format.js       # 字节/百分比/时间/数字格式化
-    ├── treemap.js      # 树状图：布局算法 + Canvas 渲染 + 交互（导出 class TreemapView）
+    ├── theme.js        # Material You 动态配色（OKLCH 色调板 → --md-* 变量，外观/主题色偏好）
+    ├── treemap.js      # 嵌套树状图：布局算法 + Canvas 渲染 + 交互（导出 class TreemapView）
     ├── table.js        # 虚拟滚动表格（可排序、分页/过滤）
     └── app.js          # 应用状态机、视图、事件绑定、轮询
 ```
@@ -27,25 +28,19 @@ src/web/
 
 ## 1. 视觉基调
 
-fnOS 风格深色专业工具。参考色：
+**Material You（Material Design 3）**。所有颜色来自 `js/theme.js` 生成的动态色板，写入 `:root` 的 `--md-*` 变量
+（同时提供 `--md-*-rgb` 供 `rgb(var(--md-x-rgb) / α)` 做半透明状态层）：
 
-```css
---bg-0:#0a0f1a;      /* 页面底 */
---bg-1:#0f1724;      /* 面板 */
---bg-2:#141f30;      /* 浮层/输入框 */
---bg-3:#1b2a40;      /* hover */
---line:#22334d;      /* 分隔线 */
---text-0:#e8eefc;    /* 主文字 */
---text-1:#9fb0c9;    /* 次文字 */
---text-2:#6b7f9c;    /* 弱文字 */
---accent:#3b82f6;    /* fnOS 蓝 */
---accent-2:#22d3ee;  /* 青 */
---ok:#34d399; --warn:#fbbf24; --danger:#f87171;
-```
-
-- 字体：`-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif`；数字用 `font-variant-numeric: tabular-nums`。
-- 圆角 8–12px；卡片阴影克制；1px 边框 `--line`。
-- 主按钮蓝色填充，次按钮透明描边。所有交互有 hover/active/focus-visible 状态。
+- 种子色 → OKLCH 色相，生成 primary / secondary / tertiary / neutral / neutral-variant 色调板（tone 0–100），
+  按 M3 规则映射浅色 / 深色两套角色色：`primary`、`on-primary`、`primary-container`、`secondary-container`、
+  `surface`、`surface-container-{lowest,low,,high,highest}`、`on-surface(-variant)`、`outline(-variant)`、`error` 等；
+  另加 `warn` / `ok` 两组语义色。
+- 外观：跟随系统 / 浅色 / 深色；主题色：6 个预设 + 自定义取色器。偏好存 `localStorage`（`trtree.theme.v1`）。
+  URL 参数 `?theme=light|dark|system&seed=%23rrggbb` 可临时覆盖（截图 / 演示，不写入偏好）。
+- 形状：4 / 8 / 12 / 16 / 28 px 与全圆角；按钮、搜索框、tab 指示器、segmented button 均按 M3 组件规范。
+- 状态层：hover 8%、按下 12%（`::before` 叠加 currentColor）。
+- 动效：`cubic-bezier(0.2,0,0,1)` 标准曲线，弹出 / 对话框用 emphasized decelerate。
+- 字体：`"Google Sans","Roboto","Noto Sans SC",…` 系统栈（不加载外部字体）；数字 `tabular-nums`。
 - 页面最小宽度 980px；≤1280px 时右侧栏折叠为可切换抽屉；≤900px 时上下堆叠。
 
 ## 2. 页面结构
@@ -106,14 +101,18 @@ fnOS 风格深色专业工具。参考色：
 
 **Treemap 画布**：
 - 占满左侧区域，`ResizeObserver` 自适应，devicePixelRatio 高清渲染。
-- 布局：squarified treemap，子项按 size 降序；单层平铺（不做嵌套小格子，避免视觉噪音；drill-down 代替）。
-- 每个 tile：2px 间隔、1px 内描边；颜色按类型/扩展名分类；hover 时白色描边 + 提升亮度；选中时 2px 白色描边 + 外发光。
+- 布局：squarified treemap，子项按 size 降序；**WizTree 式嵌套**：数据来自 `/api/scans/{id}/treemap`，
+  目录块内部继续切分为子块（递归），足够大的目录块顶部留 18px 标题栏（名称 + 大小）。
+- 配色：同一顶层分支保持同一色相，层级越深色调越亮（深色主题）/ 越暗（浅色主题），一眼看出包含关系；
+  顶层文件按扩展名分组取色（视频 / 图片 / 音频 / 压缩包 / 文档 / 代码，其余按扩展名散列），侧栏扩展名图例与列表色条同色。
+- 不可见的小子项合并为「其他 N 个小项」块（低彩度）。
+- 渲染：全部色块画到离屏底图，hover / 选中只叠加描边，保证上万块时悬停流畅。hover 时父链淡描边；选中为 primary 色 2.5px 描边 + 外发光。
 - tile 内文字（仅当宽高足够）：名称（截断）+ 大小（如 `1.2 GB`）；字号 12px/11px；文字阴影保证可读。
 - 空目录/极小项：不渲染文字。
 - 顶部浮层（画布内左上）：当前目录名 + 子项数 + 排序说明；右上角小按钮：放大/缩小？不需要。提供「显示前 N 项」提示。
-- 子项超过 4000：取前 4000，剩余聚合为「其他 N 项」（灰色，不可点击，tooltip 显示剩余总大小）。
+- 画布尺寸变化超过 1.6 倍时按新面积重新请求嵌套数据。
 - Hover tooltip（跟随鼠标，边界翻转）：名称、完整路径、大小、占父目录百分比、条目数、修改时间。
-- 单击：选中（更新侧栏 + 高亮），双击目录：进入该目录；双击文件：无操作（或定位到底部列表）。
+- 单击：选中最深一层的块（更新侧栏 + 高亮）；双击目录：进入该目录；双击嵌套文件 / 「其他」块：进入其所在目录；双击顶层文件：定位到底部列表。
 - 单击空白：取消选中。
 - 键盘：Backspace 返回上级；Enter 进入选中目录。
 

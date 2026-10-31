@@ -171,38 +171,6 @@ export function shade(hex, f) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Treemap 随机配色                                                     */
-/* ------------------------------------------------------------------ */
-
-/** 分布均匀、深浅稳定的色相池（360° 均分后取偏移，避免相邻色相撞色） */
-const RANDOM_HUES = Array.from({ length: 24 }, (_, i) => (i * 360) / 24 + 7);
-
-/**
- * 为每个节点分配一个"稳定随机"的颜色：同一次扫描中同一节点颜色不变，
- * 不同节点（含同级）颜色尽量分散，避免整屏同色。
- * @param {number|string} seed 节点 id 或路径
- * @param {number} index 兄弟节点序号（让相邻色块色相不同）
- * @param {boolean} isDir 目录用更深的明度，文件更鲜艳
- */
-export function randomTileColor(seed, index = 0, isDir = false) {
-  const h = hashString(seed);
-  const hue = RANDOM_HUES[(index + h) % RANDOM_HUES.length];
-  // 目录压暗一档，让文件更突出；明度再做小幅抖动增加层次
-  const sat = isDir ? 32 + (h % 12) : 46 + (h % 26);
-  const lig = isDir ? 24 + (h % 10) : 40 + (h % 18);
-  return `hsl(${hue.toFixed(1)}, ${sat}%, ${lig}%)`;
-}
-
-/** 按名称散列取一个稳定的装饰色（用于目录占比条等） */
-export function colorForKey(key, type, ext) {
-  if (type === 'dir') {
-    return shade(GROUP_COLORS.dir, 0.9 + (hashString(key) % 19) / 100);
-  }
-  const base = colorForExt(ext, type);
-  return shade(base, 0.9 + (hashString(key) % 17) / 100);
-}
-
-/* ------------------------------------------------------------------ */
 /* 共享轻量 DOM 工具（统一走 textContent，避免 XSS）                    */
 /* ------------------------------------------------------------------ */
 

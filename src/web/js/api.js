@@ -123,6 +123,11 @@ export const api = {
     return request('scans/' + encodeURIComponent(id) + '/tree', { params });
   },
 
+  /** 嵌套 treemap 数据（WizTree 式子块）：node / budget / area */
+  treemap(id, params = {}) {
+    return request('scans/' + encodeURIComponent(id) + '/treemap', { params, timeout: 30000 });
+  },
+
   children(id, params = {}) {
     return request('scans/' + encodeURIComponent(id) + '/children', { params });
   },

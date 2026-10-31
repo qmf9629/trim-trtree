@@ -1,5 +1,8 @@
 /**
- * treemap.js — squarified treemap 布局 + Canvas 渲染 + 交互
+ * treemap.js — WizTree 风格嵌套 squarified treemap + Canvas 渲染 + 交互
+ *
+ * 目录块内部按子项大小继续切分为子块（递归），层级越深色调越亮（深色主题）/
+ * 越暗（浅色主题），同一顶层分支保持同一色相，便于看清"谁在谁里面"。
  *
  * 导出：
  *   squarify(items, x, y, w, h) 纯函数布局（便于测试）
@@ -7,11 +10,9 @@
  */
 
 import {
-  el, formatBytes, formatNumber, formatPercent, formatTime,
-  randomTileColor, ratio,
+  el, extGroup, formatBytes, formatNumber, formatPercent, formatTime, hashString, ratio,
 } from './format.js';
-
-const MAX_TILES = 4000;
+import { getTheme, rgbCss, toneColor } from './theme.js';
 
 /* ------------------------------------------------------------------ */
 /* squarified treemap（Bruls / Huizing / van Wijk）                    */
@@ -124,7 +125,61 @@ export function squarify(items, x, y, w, h) {
   });
 }
 
+
 /* ------------------------------------------------------------------ */
+/* 嵌套布局参数                                                         */
+/* ------------------------------------------------------------------ */
+
+const FONT = '"Google Sans","Roboto","Noto Sans SC","PingFang SC","Microsoft YaHei",-apple-system,"Segoe UI",sans-serif';
+/** 目录块至少这么大（CSS px）才在内部绘制子块 */
+const NEST_MIN = 10;
+/** 目录块足够大时显示标题栏 */
+const HEADER_MIN_W = 64;
+const HEADER_MIN_H = 46;
+const HEADER_H = 18;
+
+/** 色相池：24 等分，偏移 7° 避免与主题主色完全重合 */
+const HUES = Array.from({ length: 24 }, (_, i) => (i * 360) / 24 + 7);
+
+/** 扩展名分组色相（OKLCH）：视频粉、图片绿、音频黄、压缩包紫、文档蓝、代码青 */
+const GROUP_HUES = { video: 350, image: 150, audio: 85, archive: 305, doc: 260, code: 205 };
+
+function hueFor(node, index) {
+  if (node.type !== 'dir') {
+    // 文件：同扩展名同色（WizTree 式），未知扩展名按扩展名散列
+    const g = extGroup(node.ext);
+    if (GROUP_HUES[g] !== undefined) return GROUP_HUES[g];
+    return HUES[hashString('.' + (node.ext || '')) % HUES.length];
+  }
+  const h = hashString(node.id !== undefined ? 'n' + node.id : node.path || node.name);
+  return HUES[(index + h) % HUES.length];
+}
+
+/** 与顶层文件块一致的扩展名颜色（侧栏图例 / 列表色条共用） */
+export function extColor(ext, type) {
+  const dark = getTheme().resolved !== 'light';
+  if (type === 'dir') return rgbCss(toneColor(getTheme().hue || 260, 0.075, dark ? 40 : 70));
+  if (type === 'link' || type === 'other') return rgbCss(toneColor(0, 0, dark ? 55 : 60));
+  return rgbCss(toneColor(hueFor({ type: 'file', ext }, 0), 0.12, dark ? 62 : 55));
+}
+
+function joinPath(parent, name) {
+  if (!parent) return name || '';
+  return parent.endsWith('/') ? parent + name : parent + '/' + name;
+}
+
+/**
+ * 目录 / 文件在第 depth 层的色调（M3 tone）。
+ * 深色主题越深层越亮，浅色主题越深层越暗——内层子块始终比外框更"突出"。
+ */
+function toneFor(dark, depth, isDir, jitter) {
+  if (dark) {
+    const dirTone = Math.min(26 + depth * 9, 72);
+    return isDir ? dirTone : Math.min(dirTone + 10 + jitter, 86);
+  }
+  const dirTone = Math.max(84 - depth * 8, 36);
+  return isDir ? dirTone : Math.max(dirTone - 9 + jitter, 26);
+}
 
 function fitText(ctx, text, maxW) {
   if (maxW <= 0) return '';
@@ -139,22 +194,39 @@ function fitText(ctx, text, maxW) {
   return lo > 0 ? text.slice(0, lo) + '…' : '';
 }
 
+function cssVar(name, fallback) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (r > 0.5 && ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
 export class TreemapView {
   /**
    * @param {HTMLCanvasElement} canvas
-   * @param {Object} opts { onSelect(node|null), onOpen(node), onEmptyClick() }
+   * @param {Object} opts { onSelect(node|null), onOpen(node), onOpenFile(node) }
    */
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
+    this.base = document.createElement('canvas');
+    this.baseCtx = this.base.getContext('2d', { alpha: false });
     this.opts = opts || {};
-    this.tiles = [];
+    this.roots = [];
+    this.tileCount = 0;
     this.children = [];
     this.node = null;
     this.total = 0;
+    this.hidden = 0;
     this.truncated = false;
-    this.showCount = 0;
-    this.agg = null;
     this.hover = null;
     this.selectedId = null;
     this.cssW = 0;
@@ -162,6 +234,7 @@ export class TreemapView {
     this.dpr = 1;
     this._raf = 0;
     this._tooltipTile = null;
+    this.readTheme();
 
     this.tooltip = this._createTooltip();
     this._bindEvents();
@@ -178,44 +251,53 @@ export class TreemapView {
     this._resize();
   }
 
+  /* ------------------------------- theme ---------------------------- */
+
+  /** 从 CSS 变量读取 Material 主题色（主题切换后调用 refreshTheme） */
+  readTheme() {
+    const t = getTheme();
+    this.theme = {
+      dark: t.resolved !== 'light',
+      bg: cssVar('--md-surface-container-lowest', '#0e0e11'),
+      primary: cssVar('--md-primary', '#aac7ff'),
+      onSurface: cssVar('--md-on-surface', '#e3e2e6'),
+      onSurfaceVariant: cssVar('--md-on-surface-variant', '#c4c6d0'),
+      outline: cssVar('--md-outline', '#8e9099'),
+      neutralHue: t.hue || 260,
+    };
+  }
+
+  refreshTheme() {
+    this.readTheme();
+    this._layout();
+    this._render();
+  }
+
   /* ------------------------------- data ----------------------------- */
 
   /**
-   * @param {{node:Object, children:Array, total?:number, truncated?:boolean}} data
+   * @param {{node:Object, children:Array, total?:number, hidden?:number, truncated?:boolean}} data
+   *   children 可带嵌套 children（/treemap 接口）；不带时只画一层。
+   * @param {{preserve?:boolean}} opts preserve=true 时保留选中状态且不播放淡入
    */
-  setData(data) {
+  setData(data, opts = {}) {
     this.node = (data && data.node) || null;
-    let children = Array.isArray(data && data.children) ? data.children.slice() : [];
+    const children = Array.isArray(data && data.children) ? data.children.slice() : [];
     children.sort((a, b) => (Number(b.size) || 0) - (Number(a.size) || 0));
     this.children = children;
     this.total = typeof data.total === 'number' ? data.total : children.length;
+    this.hidden = typeof data.hidden === 'number'
+      ? data.hidden
+      : Math.max(0, this.total - children.length);
     this.truncated = !!data.truncated;
-    this.agg = null;
-
-    let layoutChildren = children;
-    if (children.length > MAX_TILES) {
-      const head = children.slice(0, MAX_TILES);
-      const rest = children.slice(MAX_TILES);
-      const restSize = rest.reduce((s, n) => s + (Number(n.size) || 0), 0);
-      this.agg = {
-        id: '__other__',
-        agg: true,
-        name: `其他 ${formatNumber(rest.length)} 项`,
-        size: restSize,
-        alloc: rest.reduce((s, n) => s + (Number(n.alloc) || 0), 0),
-        count: rest.reduce((s, n) => s + (Number(n.count) || 0), 0),
-        type: 'dir',
-        ext: '',
-        restCount: rest.length,
-        path: '',
-      };
-      layoutChildren = head.concat([this.agg]);
-    }
-    this.showCount = children.length > MAX_TILES ? MAX_TILES : children.length;
+    this.nested = children.some((c) => Array.isArray(c.children));
 
     this.hover = null;
     this._hideTooltip();
     this._resize(true);
+    if (!opts.preserve && this.canvas.animate) {
+      this.canvas.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 220, easing: 'cubic-bezier(0.2,0,0,1)' });
+    }
   }
 
   setSelected(id) {
@@ -225,9 +307,19 @@ export class TreemapView {
     this._draw();
   }
 
-  /** 返回可见 tile 数量（不含聚合项） */
+  /** 第一层可见块数量（不含「其他小项」） */
   getShownCount() {
-    return this.showCount;
+    return this.roots.filter((t) => !t.rest).length;
+  }
+
+  /** 已绘制的全部块数量（含嵌套） */
+  getTileCount() {
+    return this.tileCount;
+  }
+
+  /** 画布面积（CSS px²），用于向后端请求合适的嵌套精度 */
+  getArea() {
+    return Math.max(0, this.cssW * this.cssH);
   }
 
   /* ------------------------------ sizing ---------------------------- */
@@ -238,9 +330,15 @@ export class TreemapView {
     const w = Math.max(0, Math.floor(rect.width));
     const h = Math.max(0, Math.floor(rect.height));
     const dpr = Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
-    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
-      this.canvas.width = Math.round(w * dpr);
-      this.canvas.height = Math.round(h * dpr);
+    const pw = Math.round(w * dpr);
+    const ph = Math.round(h * dpr);
+    if (this.canvas.width !== pw || this.canvas.height !== ph) {
+      this.canvas.width = pw;
+      this.canvas.height = ph;
+    }
+    if (this.base.width !== pw || this.base.height !== ph) {
+      this.base.width = pw;
+      this.base.height = ph;
     }
     this.cssW = w;
     this.cssH = h;
@@ -251,45 +349,221 @@ export class TreemapView {
   _resize(force = false) {
     const prevW = this.cssW;
     const prevH = this.cssH;
+    const prevDpr = this.dpr;
     const ok = this._measure();
     if (!ok) return;
-    if (force || prevW !== this.cssW || prevH !== this.cssH) {
+    if (force || prevW !== this.cssW || prevH !== this.cssH || prevDpr !== this.dpr) {
       this._layout();
+      this._render();
+    } else {
+      this._draw();
     }
-    this._draw();
   }
 
+  /* ------------------------------ layout ---------------------------- */
+
   _layout() {
-    const tiles = [];
-    const w = this.cssW;
-    const h = this.cssH;
+    this.tileCount = 0;
+    this.roots = [];
+    if (!this.node || !this.cssW || !this.cssH) return;
+    this.roots = this._layoutLevel(
+      this.node, this.children, this.hidden,
+      { x: 0, y: 0, w: this.cssW, h: this.cssH }, 0, null,
+    );
+  }
+
+  /**
+   * 在 rect 内布局 parent 的子项，返回 tile 数组；目录递归布局到其内部。
+   * 未展示的小子项（parent.size - Σchildren）合并成一个「其他」块。
+   */
+  _layoutLevel(parent, kids, hiddenCount, rect, depth, parentTile) {
     const items = [];
-    for (const n of this.children) {
-      const size = Number(n.size) || 0;
-      items.push({ node: n, value: size, agg: false });
+    let sum = 0;
+    for (const n of kids) {
+      const v = Number(n.size) || 0;
+      if (v <= 0) continue;
+      sum += v;
+      items.push({ node: n, value: v });
     }
-    if (this.agg) {
-      items.push({ node: this.agg, value: Number(this.agg.size) || 0, agg: true });
+    const parentSize = Number(parent.size) || 0;
+    const rest = parentSize - sum;
+    if (rest > 0 && rest > parentSize * 1e-4 && (items.length > 0 || hiddenCount > 0)) {
+      items.push({ node: null, value: rest, rest: true });
     }
-    const laid = squarify(items, 0, 0, w, h);
-    for (let i = 0; i < laid.length; i++) {
-      const t = laid[i];
+    if (!items.length) return [];
+
+    const laid = squarify(items, rect.x, rect.y, rect.w, rect.h);
+    const dark = this.theme.dark;
+    const gap = depth === 0 ? 1 : 0.5;
+    const out = [];
+    let idx = 0;
+    for (const t of laid) {
       if (!(t.w > 0) || !(t.h > 0)) continue;
-      // index 参与配色取色，保证相邻色块色相不同
-      t.index = i;
-      tiles.push(t);
+      const dx = t.x + gap;
+      const dy = t.y + gap;
+      const dw = t.w - gap * 2;
+      const dh = t.h - gap * 2;
+      if (dw < 0.6 || dh < 0.6) continue;
+
+      const tile = {
+        x: t.x, y: t.y, w: t.w, h: t.h,
+        dx, dy, dw, dh,
+        depth,
+        parent: parentTile,
+        parentNode: parent,
+        rest: !!t.rest,
+        node: null,
+        children: null,
+        header: false,
+        hue: 0,
+        tone: 0,
+        fill: '',
+        ink: '',
+      };
+
+      if (t.rest) {
+        const count = hiddenCount > 0 ? hiddenCount : 0;
+        tile.node = {
+          id: '__rest__' + (parent.id !== undefined ? parent.id : ''),
+          agg: true,
+          name: count > 0 ? `其他 ${formatNumber(count)} 个小项` : '其他小项',
+          size: rest,
+          restCount: count,
+          type: 'other',
+          path: parent.path || '',
+        };
+        tile.hue = parentTile ? parentTile.hue : this.theme.neutralHue;
+        tile.tone = toneFor(dark, depth, false, 0) + (dark ? -6 : 6);
+        tile.fill = rgbCss(toneColor(tile.hue, parentTile ? 0.025 : 0.01, tile.tone));
+      } else {
+        const n = t.node;
+        if (!n.path && parent.path) n.path = joinPath(parent.path, n.name || '');
+        if (n.parentId === undefined && parent.id !== undefined) n.parentId = parent.id;
+        tile.node = n;
+        tile.hue = parentTile ? parentTile.hue : hueFor(n, idx);
+        const isDir = n.type === 'dir';
+        const jitter = isDir ? 0 : ((hashString(n.name || '') % 9) - 4);
+        tile.tone = toneFor(dark, depth, isDir, jitter);
+        const chroma = n.type === 'link' || n.type === 'other' ? 0.02 : (isDir ? 0.075 : 0.12);
+        tile.fill = rgbCss(toneColor(tile.hue, chroma, tile.tone));
+        idx++;
+
+        const sub = isDir && Array.isArray(n.children) ? n.children : null;
+        if (sub && (sub.length || n.hidden) && dw >= NEST_MIN && dh >= NEST_MIN) {
+          let inner;
+          if (dw >= HEADER_MIN_W && dh >= HEADER_MIN_H) {
+            tile.header = true;
+            inner = { x: dx + 3, y: dy + HEADER_H, w: dw - 6, h: dh - HEADER_H - 3 };
+          } else {
+            inner = { x: dx + 2, y: dy + 2, w: dw - 4, h: dh - 4 };
+          }
+          if (inner.w >= 3 && inner.h >= 3) {
+            const hid = typeof n.hidden === 'number' ? n.hidden : Math.max(0, (n.childCount || 0) - sub.length);
+            tile.children = this._layoutLevel(n, sub, hid, inner, depth + 1, tile);
+            if (!tile.children.length) tile.children = null;
+          }
+          if (!tile.children) tile.header = false;
+        }
+      }
+      tile.ink = tile.tone >= 60 ? 'rgba(0,0,0,0.86)' : 'rgba(255,255,255,0.95)';
+      tile.inkSoft = tile.tone >= 60 ? 'rgba(0,0,0,0.62)' : 'rgba(255,255,255,0.72)';
+      this.tileCount++;
+      out.push(tile);
     }
-    tiles.sort((a, b) => (b.w * b.h) - (a.w * a.h));
-    this.tiles = tiles;
+    return out;
   }
 
   /* ------------------------------- draw ----------------------------- */
 
-  _fillFor(tile) {
-    if (tile.agg) return 'rgb(71,85,105)';
+  /** 把全部色块画到离屏底图；hover/选中只在 _draw 中叠加 */
+  _render() {
+    const ctx = this.baseCtx;
+    if (!ctx) return;
+    const w = this.cssW;
+    const h = this.cssH;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.fillStyle = this.theme.bg;
+    ctx.fillRect(0, 0, w, h);
+    if (this.roots.length) {
+      const stack = this.roots.slice().reverse();
+      while (stack.length) {
+        const tile = stack.pop();
+        this._drawTile(ctx, tile);
+        if (tile.children) {
+          for (let i = tile.children.length - 1; i >= 0; i--) stack.push(tile.children[i]);
+        }
+      }
+    }
+    this._draw();
+  }
+
+  _drawTile(ctx, tile) {
+    const { dx, dy, dw, dh } = tile;
+    const small = dw < 6 || dh < 6;
+    const r = small ? 0 : Math.min(tile.depth === 0 ? 8 : 4, dw / 4, dh / 4);
+    ctx.fillStyle = tile.fill;
+    if (r > 0.5) {
+      roundRectPath(ctx, dx, dy, dw, dh, r);
+      ctx.fill();
+    } else {
+      ctx.fillRect(dx, dy, dw, dh);
+    }
+
+    if (tile.header) {
+      this._drawHeader(ctx, tile);
+    } else if (!tile.children && dw >= 50 && dh >= 22) {
+      this._drawLabel(ctx, tile);
+    }
+  }
+
+  _drawHeader(ctx, tile) {
     const n = tile.node;
-    // 每个色块使用稳定随机色：同一次扫描中颜色不变，相邻块色相分散
-    return randomTileColor(n.id !== undefined ? 'n' + n.id : n.path || n.name, tile.index || 0, n.type === 'dir');
+    const pad = 6;
+    const maxW = tile.dw - pad * 2;
+    if (maxW < 20) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(tile.dx, tile.dy, tile.dw, HEADER_H);
+    ctx.clip();
+    ctx.textBaseline = 'middle';
+    ctx.font = `500 11.5px ${FONT}`;
+    const sizeText = formatBytes(n.size);
+    const sizeW = ctx.measureText(sizeText).width;
+    const nameW = maxW - (sizeW + 8 <= maxW * 0.5 ? sizeW + 8 : 0);
+    ctx.fillStyle = tile.ink;
+    const nameText = fitText(ctx, n.name || n.path || '', nameW);
+    const cy = tile.dy + HEADER_H / 2 + 0.5;
+    if (nameText) ctx.fillText(nameText, tile.dx + pad, cy);
+    if (nameW < maxW) {
+      ctx.font = `400 10.5px ${FONT}`;
+      ctx.fillStyle = tile.inkSoft;
+      ctx.textAlign = 'right';
+      ctx.fillText(sizeText, tile.dx + tile.dw - pad, cy);
+    }
+    ctx.restore();
+  }
+
+  _drawLabel(ctx, tile) {
+    const n = tile.node;
+    const pad = 6;
+    const maxW = tile.dw - pad * 2;
+    if (maxW < 22) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(tile.dx + 1, tile.dy + 1, tile.dw - 2, tile.dh - 2);
+    ctx.clip();
+    ctx.textBaseline = 'top';
+    ctx.font = `500 12px ${FONT}`;
+    ctx.fillStyle = tile.ink;
+    const nameText = fitText(ctx, n.name || n.path || '', maxW);
+    if (nameText) ctx.fillText(nameText, tile.dx + pad, tile.dy + pad);
+    if (tile.dh >= 38 && tile.dw >= 56) {
+      ctx.font = `400 11px ${FONT}`;
+      ctx.fillStyle = tile.inkSoft;
+      const sizeText = fitText(ctx, formatBytes(n.size), maxW);
+      if (sizeText) ctx.fillText(sizeText, tile.dx + pad, tile.dy + pad + 17);
+    }
+    ctx.restore();
   }
 
   _draw() {
@@ -297,102 +571,63 @@ export class TreemapView {
     if (!ctx) return;
     const w = this.cssW;
     const h = this.cssH;
-    const dpr = this.dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#0b1220';
-    ctx.fillRect(0, 0, w, h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (this.base.width && this.base.height) ctx.drawImage(this.base, 0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    const hasArea = this.tiles.length > 0;
-    if (!hasArea) {
+    if (!this.roots.length) {
+      ctx.fillStyle = this.theme.bg;
+      ctx.fillRect(0, 0, w, h);
       this._drawEmpty(ctx, w, h, this.children.length > 0);
       return;
     }
 
-    const selected = this.selectedId;
-    let selectedTile = null;
-
-    for (const tile of this.tiles) {
-      const gap = 1;
-      const x = tile.x + gap;
-      const y = tile.y + gap;
-      const tw = tile.w - gap * 2;
-      const th = tile.h - gap * 2;
-      if (tw <= 0.5 || th <= 0.5) continue;
-
-      ctx.fillStyle = this._fillFor(tile);
-      ctx.fillRect(x, y, tw, th);
-      ctx.strokeStyle = 'rgba(0,0,0,0.38)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, tw - 1), Math.max(0, th - 1));
-
-      if (this.hover === tile) {
-        ctx.fillStyle = 'rgba(255,255,255,0.07)';
-        ctx.fillRect(x, y, tw, th);
-      }
-
-      const isSel = selected !== null && !tile.agg && tile.node.id === selected;
-      if (isSel) selectedTile = tile;
-
-      if (tw >= 54 && th >= 24) {
-        this._drawLabel(ctx, tile, x, y, tw, th);
-      }
-    }
-
-    // hover / selection 描边绘制在所有色块之上
+    const selectedTile = this.selectedId !== null ? this._findTile(this.selectedId) : null;
     if (this.hover && this.hover !== selectedTile) {
-      this._strokeTile(this.hover, 'rgba(255,255,255,0.88)', 1.5, false);
+      // 悬停：父链淡描边 + 目标块状态层
+      for (let p = this.hover.parent; p; p = p.parent) {
+        this._strokeTile(ctx, p, this.theme.dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.3)', 1, false);
+      }
+      ctx.fillStyle = this.theme.dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)';
+      roundRectPath(ctx, this.hover.dx, this.hover.dy, this.hover.dw, this.hover.dh, this._radius(this.hover));
+      ctx.fill();
+      this._strokeTile(ctx, this.hover, this.theme.onSurface, 1.5, false);
     }
     if (selectedTile) {
-      this._strokeTile(selectedTile, '#ffffff', 2, true);
+      this._strokeTile(ctx, selectedTile, this.theme.primary, 2.5, true);
     }
   }
 
-  _strokeTile(tile, color, width, glow) {
-    const ctx = this.ctx;
-    const x = tile.x + 1.5;
-    const y = tile.y + 1.5;
-    const w = Math.max(0, tile.w - 3);
-    const h = Math.max(0, tile.h - 3);
+  _radius(tile) {
+    if (tile.dw < 6 || tile.dh < 6) return 0;
+    return Math.min(tile.depth === 0 ? 8 : 4, tile.dw / 4, tile.dh / 4);
+  }
+
+  _strokeTile(ctx, tile, color, width, glow) {
+    const inset = width / 2;
+    const w = tile.dw - width;
+    const h = tile.dh - width;
     if (w <= 0 || h <= 0) return;
     ctx.save();
     if (glow) {
-      ctx.shadowColor = 'rgba(255,255,255,0.55)';
-      ctx.shadowBlur = 10;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 12;
     }
     ctx.strokeStyle = color;
     ctx.lineWidth = width;
-    ctx.strokeRect(x, y, w, h);
+    roundRectPath(ctx, tile.dx + inset, tile.dy + inset, w, h, Math.max(0, this._radius(tile) - inset));
+    ctx.stroke();
     ctx.restore();
   }
 
-  _drawLabel(ctx, tile, x, y, tw, th) {
-    const n = tile.node;
-    const pad = 6;
-    const maxW = tw - pad * 2;
-    if (maxW < 24) return;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x + 2, y + 2, tw - 4, th - 4);
-    ctx.clip();
-    ctx.textBaseline = 'top';
-    ctx.shadowColor = 'rgba(0,0,0,0.75)';
-    ctx.shadowBlur = 3;
-    ctx.shadowOffsetY = 1;
-
-    const name = tile.agg ? n.name : (n.name || n.path || '');
-    const showSize = th >= 40 && tw >= 56;
-    ctx.font = '600 12px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.96)';
-    const nameText = fitText(ctx, name, maxW);
-    if (nameText) ctx.fillText(nameText, x + pad, y + pad + 1);
-
-    if (showSize) {
-      ctx.font = '11px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.72)';
-      const sizeText = fitText(ctx, formatBytes(n.size), maxW);
-      if (sizeText) ctx.fillText(sizeText, x + pad, y + pad + 18);
+  _findTile(id) {
+    const stack = this.roots.slice();
+    while (stack.length) {
+      const t = stack.pop();
+      if (!t.rest && t.node.id === id) return t;
+      if (t.children) for (const c of t.children) stack.push(c);
     }
-    ctx.restore();
+    return null;
   }
 
   _drawEmpty(ctx, w, h, hasChildren) {
@@ -400,11 +635,11 @@ export class TreemapView {
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(232,238,252,0.72)';
-    ctx.font = '600 14px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = this.theme.onSurface;
+    ctx.font = `500 14px ${FONT}`;
     ctx.fillText(hasChildren ? '无可显示的占用空间' : '此目录为空', w / 2, h / 2 - 10);
-    ctx.fillStyle = 'rgba(159,176,201,0.6)';
-    ctx.font = '12px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = this.theme.onSurfaceVariant;
+    ctx.font = `12px ${FONT}`;
     ctx.fillText(hasChildren ? '子项大小均为 0 字节' : '当前目录下没有任何条目', w / 2, h / 2 + 14);
     ctx.restore();
   }
@@ -433,16 +668,28 @@ export class TreemapView {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  /** 命中最深一层的块 */
   _hit(x, y) {
-    for (let i = this.tiles.length - 1; i >= 0; i--) {
-      const t = this.tiles[i];
-      if (x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h) return t;
+    let list = this.roots;
+    let found = null;
+    while (list) {
+      let next = null;
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h) {
+          next = t;
+          break;
+        }
+      }
+      if (!next) break;
+      found = next;
+      list = next.children;
     }
-    return null;
+    return found;
   }
 
   _handleMove(e) {
-    if (!this.tiles.length) return;
+    if (!this.roots.length) return;
     const p = this._localPoint(e);
     const tile = this._hit(p.x, p.y);
     if (tile !== this.hover) {
@@ -471,7 +718,7 @@ export class TreemapView {
       }
       return;
     }
-    if (tile.agg) return;
+    if (tile.rest) return;
     this.selectedId = tile.node.id;
     this._draw();
     if (this.opts.onSelect) this.opts.onSelect(tile.node);
@@ -479,13 +726,18 @@ export class TreemapView {
 
   _handleDblClick(e) {
     const p = this._localPoint(e);
-    const tile = this._hit(p.x, p.y);
-    if (!tile || tile.agg) return;
-    if (tile.node.type === 'dir') {
-      if (this.opts.onOpen) this.opts.onOpen(tile.node);
-    } else if (this.opts.onOpenFile) {
-      this.opts.onOpenFile(tile.node);
+    let tile = this._hit(p.x, p.y);
+    if (!tile) return;
+    // 「其他小项」或嵌套内的文件：进入其所在目录
+    if (tile.rest || tile.node.type !== 'dir') {
+      if (!tile.rest && !tile.parent && this.opts.onOpenFile) {
+        this.opts.onOpenFile(tile.node);
+        return;
+      }
+      tile = tile.parent;
+      if (!tile) return;
     }
+    if (this.opts.onOpen) this.opts.onOpen(tile.node);
   }
 
   /* ----------------------------- tooltip ---------------------------- */
@@ -500,6 +752,7 @@ export class TreemapView {
     const fields = [
       ['size', '大小'],
       ['pct', '占父级'],
+      ['view', '占当前目录'],
       ['count', '条目数'],
       ['mtime', '修改时间'],
     ];
@@ -522,25 +775,28 @@ export class TreemapView {
   _fillTooltip(tile) {
     const tt = this._tt;
     const n = tile.node;
-    if (tile.agg) {
+    const parentSize = (tile.parentNode && tile.parentNode.size) || 0;
+    const viewSize = (this.node && this.node.size) || 0;
+    tt.rows.size.textContent = formatBytes(n.size);
+    tt.rows.pct.textContent = formatPercent(ratio(n.size, parentSize));
+    tt.rows.view.textContent = formatPercent(ratio(n.size, viewSize));
+    if (tile.rest) {
       tt.name.textContent = n.name;
-      tt.path.textContent = `超出单层渲染上限，剩余 ${formatNumber(n.restCount)} 项已聚合`;
-      tt.rows.size.textContent = formatBytes(n.size);
-      tt.rows.pct.textContent = formatPercent(ratio(n.size, (this.node && this.node.size) || 0));
-      tt.rows.count.textContent = formatNumber(n.restCount) + ' 项';
+      tt.path.textContent = n.path ? `位于 ${n.path}` : '';
+      tt.rows.count.textContent = n.restCount ? formatNumber(n.restCount) + ' 项' : '—';
       tt.rows.mtime.textContent = '—';
-      tt.hint.textContent = '聚合项不可选中';
+      tt.hint.textContent = '体积过小无法单独绘制，已合并 · 双击进入所在目录';
       return;
     }
     tt.name.textContent = n.name || n.path || '';
     tt.path.textContent = n.path || '';
-    tt.rows.size.textContent = formatBytes(n.size);
-    tt.rows.pct.textContent = formatPercent(ratio(n.size, (this.node && this.node.size) || 0));
     tt.rows.count.textContent = formatNumber(n.count);
     tt.rows.mtime.textContent = formatTime(n.mtime);
-    tt.hint.textContent = n.type === 'dir'
-      ? (n.mount ? '跨文件系统挂载点（未深入扫描）' : '双击进入此目录')
-      : '单击选中 · 双击定位到列表';
+    if (n.type === 'dir') {
+      tt.hint.textContent = n.mount ? '跨文件系统挂载点（未深入扫描）' : '单击选中 · 双击进入此目录';
+    } else {
+      tt.hint.textContent = tile.parent ? '单击选中 · 双击进入所在目录' : '单击选中 · 双击定位到列表';
+    }
   }
 
   _positionTooltip(cx, cy) {

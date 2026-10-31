@@ -225,6 +225,40 @@ Summary 字段见第 3 节 `history` 条目。
 - `ancestors` 从根到父节点（不含 `node`），用于面包屑。
 - `depth>1` 时子项自身也带 `children` 字段（同样结构），最多展开到 depth 层；`truncated` 表示某层是否截断。
 
+## 7.1 GET /api/scans/{id}/treemap
+
+WizTree 式嵌套 Treemap 数据：从 `node` 开始按「大目录优先」逐层展开，直到节点预算用完。
+前端据此在目录块内部绘制子块。
+
+| 参数 | 说明 |
+| --- | --- |
+| `node` | 起始节点，默认 0 |
+| `budget` | 最多返回的节点数，默认 16000，最大 60000 |
+| `area` | 画布面积（CSS px²），用于推算可见阈值；默认 1,500,000 |
+
+```json
+{
+  "node": { NodeDTO },
+  "children": [
+    {
+      "id": 3, "name": "Photos", "type": "dir", "size": 123, "alloc": 120, "mtime": 0,
+      "count": 42, "childCount": 12, "parentId": 0, "hidden": 4,
+      "children": [ { "id": 9, "name": "a.jpg", "type": "file", "ext": "jpg", "size": 10, "...": "..." } ]
+    }
+  ],
+  "hidden": 0,
+  "nodes": 10233,
+  "budgetHit": false,
+  "minSize": 12
+}
+```
+
+- 节点结构为精简版 NodeDTO：不含 `path`（前端用父路径 + `name` 拼接），`ext`/`mount`/`hidden` 为空时省略。
+- 小于 `size(node) × 3 / area` 字节（约 3 px²）的子项不返回，计入父节点 `hidden`；它们的大小仍包含在父节点 `size` 中，前端绘制为「其他 N 个小项」。
+- 小于约 120 px² 的目录、挂载点、超过 48 层的目录不再展开；单个目录最多展开 4000 个子项。
+- `budgetHit=true` 表示预算用尽，部分大目录未展开（仍会显示为单个目录块）。
+- 客户端声明 `Accept-Encoding: gzip` 且响应超过 16 KB 时以 gzip 返回（通常可压缩约 7 倍）。
+
 ## 8. GET /api/scans/{id}/children
 
 分页的「文件列表」。参数：`node=0`、`offset=0`、`limit=100`（最大 1000）、`sort`、`dir`、`q`（名称包含，忽略大小写）、`kind`（`all` / `file` / `dir`）。

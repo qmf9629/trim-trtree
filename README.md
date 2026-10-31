@@ -16,7 +16,8 @@
 ## 功能
 
 - **秒级扫描**：并发遍历目录树，310 万级节点通常数秒内完成（取决于磁盘与元数据缓存）。
-- **Treemap 树状图**：Canvas squarified 布局，面积即占用；悬停查看详情，单击选中，双击逐层钻取。
+- **WizTree 式嵌套 Treemap**：目录块内部继续以子块显示子文件 / 子文件夹，同一分支同一色相、层级越深色深越不同，一眼看清"谁在谁里面"；同类文件同色。Canvas squarified 布局，面积即占用；悬停查看详情，单击选中，双击逐层钻取。
+- **Material You 界面**：Material Design 3 风格，浅色 / 深色 / 跟随系统，6 种预设主题色或自定义取色，整套界面与 Treemap 配色随主题动态生成。
 - **虚拟滚动列表**：按大小 / 名称 / 占用 / 条目数 / 修改时间排序，显示逻辑大小、磁盘占用、占父级比例。
 - **全局搜索**：按名称搜索，可过滤文件 / 目录与最小大小；结果可直接定位到所在层级。
 - **大文件 Top 100 / 1000**：快速找出最占空间的文件。
@@ -25,7 +26,6 @@
 - **在文件管理器中打开**：对任意文件/目录一键跳到 fnOS 文件管理器的所在位置（通过桌面壳桥接 `openFileManager`，与官方微应用一致）。默认用**普通用户视角**；只有别人的共享目录、团队文件、系统目录等普通用户看不见的位置才自动切到管理员「全部文件」视角。
 - **列表行内操作**：文件列表每一行都有「打开所在位置」「删除」按钮，无需先选中再看侧栏。
 - **删除条目**：可直接永久删除文件或整个目录，需二次确认并显示路径、大小与条目数；删除后扫描结果自动失效并提示重新分析。
-- **随机配色 Treemap**：每个色块使用稳定随机色，同级相邻色块色相分散，便于区分。
 - **只读优先**：日常浏览只读取元数据；删除必须由管理员手动确认。
 
 ![结果页](docs/screenshots/result.png)
@@ -36,9 +36,9 @@
 | --- | --- |
 | ![钻取](docs/screenshots/drill.png) | ![目录选择](docs/screenshots/picker.png) |
 
-| 删除二次确认 |
-| --- |
-| ![删除确认](docs/screenshots/confirm.png) |
+| 删除二次确认 | 浅色主题 · 自定义主题色 |
+| --- | --- |
+| ![删除确认](docs/screenshots/confirm.png) | ![浅色主题](docs/screenshots/light.png) |
 
 ## 安装
 
@@ -88,7 +88,7 @@ bash scripts/dev.sh          # http://127.0.0.1:18080/
 bash scripts/test.sh
 
 # 构建双架构二进制并打包 fpk
-bash scripts/pack.sh         # dist/trtree-1.0.2.fpk
+bash scripts/pack.sh         # dist/trtree-1.2.0.fpk
 ```
 
 本地开发模式默认 `TRTREE_ALLOW_ALL=1`，不需要 fnOS 网关注入管理员头；生产环境由网关传递
@@ -102,7 +102,7 @@ bash scripts/pack.sh         # dist/trtree-1.0.2.fpk
 并创建 Release 附带安装包与 `SHA256SUMS.txt`。
 
 ```bash
-git tag v1.1.2 && git push origin v1.1.2
+git tag v1.2.0 && git push origin v1.2.0
 ```
 
 ### 目录结构

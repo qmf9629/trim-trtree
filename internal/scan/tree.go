@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // NodeType identifies the kind of a filesystem entry.
@@ -65,10 +66,12 @@ type Tree struct {
 	Total       []uint32 // recursive entry count, includes self
 	Mount       []bool
 
-	RootPath  string
-	RootDev   uint64
-	Truncated bool
-	MaxNodes  int
+	RootPath string
+	RootDev  uint64
+	MaxNodes int
+
+	// truncated 由多个 worker 并发置位，用 atomic 避免数据竞争
+	truncated atomic.Bool
 
 	TotalFiles int64
 	TotalDirs  int64
@@ -106,11 +109,15 @@ func NewTree(rootPath, rootName string, rootDev uint64, maxNodes int) *Tree {
 // AddChildren appends a batch of entries under parent and returns their ids.
 // Sibling order is the order in which workers happened to add them; callers sort.
 func (t *Tree) AddChildren(parent int32, batch []Candidate) []int32 {
-	if len(batch) == 0 || parent < 0 || int(parent) >= len(t.Names) {
+	if len(batch) == 0 || parent < 0 {
 		return nil
 	}
+	// 边界检查也必须在锁内：len(t.Names) 会被其它 worker 并发追加。
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if int(parent) >= len(t.Names) {
+		return nil
+	}
 
 	ids := make([]int32, 0, len(batch))
 	for _, c := range batch {
@@ -151,7 +158,25 @@ func (t *Tree) AddChildren(parent int32, batch []Candidate) []int32 {
 }
 
 // Len returns the number of nodes.
-func (t *Tree) Len() int { return len(t.Names) }
+// 扫描期间 Nodes 切片会被 worker 并发追加，因此必须持有锁再读长度。
+func (t *Tree) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.Names)
+}
+
+// AtCapacity reports whether the tree already reached MaxNodes.
+func (t *Tree) AtCapacity() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.Names) >= t.MaxNodes
+}
+
+// MarkTruncated records that the scan stopped early because of MaxNodes.
+func (t *Tree) MarkTruncated() { t.truncated.Store(true) }
+
+// IsTruncated reports whether the scan was truncated.
+func (t *Tree) IsTruncated() bool { return t.truncated.Load() }
 
 // Aggregate folds child sizes into parents in one reverse pass.
 func (t *Tree) Aggregate() {

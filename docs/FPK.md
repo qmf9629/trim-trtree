@@ -137,7 +137,7 @@ scripts/pack.sh           # fnpack build --directory packaging → dist/trtree-1
 scp dist/trtree-1.0.2.fpk qmf@NAS:/tmp/
 
 # 安装（需 sudo 密码；1.2.0800 支持 install-fpk）
-sudo appcenter-cli install-fpk /tmp/trtree-1.1.2.fpk
+sudo appcenter-cli install-fpk /tmp/trtree-1.1.3.fpk
 
 # 或 App Center → 手动安装
 

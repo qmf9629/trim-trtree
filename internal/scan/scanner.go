@@ -171,7 +171,7 @@ func Scan(ctx context.Context, root string, opts Options, prog *Progress) (*Tree
 		close(jobs)
 		wg.Wait()
 
-		if tree.Truncated || ctx.Err() != nil {
+		if tree.IsTruncated() || ctx.Err() != nil {
 			break
 		}
 		total := 0
@@ -210,8 +210,8 @@ func scanDir(
 	if ctx.Err() != nil {
 		return nil
 	}
-	if tree.Len() >= tree.MaxNodes {
-		tree.Truncated = true
+	if tree.AtCapacity() {
+		tree.MarkTruncated()
 		return nil
 	}
 	prog.SetCurrent(item.path)

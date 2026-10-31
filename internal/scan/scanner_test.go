@@ -140,7 +140,7 @@ func TestScanMaxNodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tree.Truncated {
+	if !tree.IsTruncated() {
 		t.Fatalf("expected truncated tree, len=%d", tree.Len())
 	}
 	if tree.Len() > 3 {

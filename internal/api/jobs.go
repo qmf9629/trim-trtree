@@ -184,7 +184,7 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 	}
 	if tree != nil {
 		j.tree = tree
-		j.truncated = tree.Truncated
+		j.truncated = tree.IsTruncated()
 	}
 	j.mu.Unlock()
 

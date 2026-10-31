@@ -9,6 +9,7 @@
 
 - 仓库：<https://github.com/qmf9629/trim-trtree>
 - 下载：<https://github.com/qmf9629/trim-trtree/releases>
+- 开发方式：使用 **DeepSeek** 辅助开发（设计、编码、调试与文档）
 
 ![空状态](docs/screenshots/empty.png)
 
@@ -159,6 +160,13 @@ tools/                  mock server、Playwright 截图脚本
 - 422,881 个节点，耗时约 1–2 秒，0 个读取错误；
 - 常驻内存约 95 MB；
 - 全局搜索约 25 ms，扩展名统计 < 1 ms，目录 CSV 导出（7.7 MB）约 120 ms。
+
+## 关于开发
+
+本项目使用 [DeepSeek](https://www.deepseek.com/) 辅助开发：从架构设计、Go 后端、
+Canvas Treemap 前端到 fnOS 打包与调试，均由作者与 DeepSeek 协作完成。
+
+遇到问题欢迎到 [Issues](https://github.com/qmf9629/trim-trtree/issues) 反馈。
 
 ## 许可证
 

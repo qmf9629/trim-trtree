@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -205,6 +206,25 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleDeleteHistory 清除某个路径的历史扫描记录（可按路径批量删）。
+func (s *Server) handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		writeErr(w, http.StatusBadRequest, "缺少路径参数 path")
+		return
+	}
+	removed, err := s.jobs.DeleteHistory(path)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, ErrHistoryNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed, "path": path})
 }
 
 func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {

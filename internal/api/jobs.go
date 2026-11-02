@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -283,6 +284,47 @@ func (m *Manager) Delete(id string) error {
 	delete(m.scans, id)
 	m.order = removeString(m.order, id)
 	return nil
+}
+
+// ErrHistoryNotFound 表示没有被匹配到的历史记录。
+var ErrHistoryNotFound = errors.New("历史记录不存在")
+
+// DeleteHistory 删除指定路径的全部历史记录，返回删除的条数。
+// 只清理持久化的历史列表，不动内存中仍可查看的扫描结果。
+func (m *Manager) DeleteHistory(path string) (int, error) {
+	target := normalizeHistoryPath(path)
+	if target == "" {
+		return 0, fmt.Errorf("缺少要删除的路径")
+	}
+
+	m.mu.Lock()
+	kept := make([]Summary, 0, len(m.history))
+	removed := 0
+	for _, h := range m.history {
+		if normalizeHistoryPath(h.Path) == target {
+			removed++
+			continue
+		}
+		kept = append(kept, h)
+	}
+	if removed == 0 {
+		m.mu.Unlock()
+		return 0, ErrHistoryNotFound
+	}
+	m.history = kept
+	m.mu.Unlock()
+
+	m.saveHistory()
+	return removed, nil
+}
+
+// normalizeHistoryPath 统一末尾斜杠，便于按路径匹配历史记录。
+func normalizeHistoryPath(p string) string {
+	p = strings.TrimSpace(p)
+	for len(p) > 1 && strings.HasSuffix(p, "/") {
+		p = strings.TrimSuffix(p, "/")
+	}
+	return p
 }
 
 func (m *Manager) History() []Summary {

@@ -501,15 +501,29 @@ function needAdminView(dir, uid = 1000) {
   return parts[1].startsWith('@');
 }
 
+// 历史记录是可变的，删除接口需要能真正清掉条目
+let historyStore = null;
+
 function historyPayload() {
-  const list = [
-    summaryOf(SEED_FULL),
-    summaryOf(SEED_PHOTOS),
-    summaryOf(SEED_PHOTOS_OLD),
-    summaryOf(SEED_BACKUP),
-    Object.assign({}, STALE_HISTORY),
-  ];
-  return list.sort((a, b) => b.startedAt - a.startedAt);
+  if (!historyStore) {
+    historyStore = [
+      summaryOf(SEED_FULL),
+      summaryOf(SEED_PHOTOS),
+      summaryOf(SEED_PHOTOS_OLD),
+      summaryOf(SEED_BACKUP),
+      Object.assign({}, STALE_HISTORY),
+    ].sort((a, b) => b.startedAt - a.startedAt);
+  }
+  return historyStore;
+}
+
+/** 与后端一致：按路径（忽略末尾斜杠）清除历史记录 */
+function deleteHistory(path) {
+  const target = String(path || '').trim().replace(/\/+$/, '') || '/';
+  const list = historyPayload();
+  const before = list.length;
+  historyStore = list.filter((h) => (String(h.path || '').trim().replace(/\/+$/, '') || '/') !== target);
+  return before - historyStore.length;
 }
 
 let activeScanId = null;
@@ -875,6 +889,15 @@ async function handleApi(req, res, pathname, query) {
   }
   if (pathname === '/api/browse' && method === 'GET') {
     return json(res, 200, browsePayload(query.get('path')));
+  }
+
+  /* ---- 历史记录 ---- */
+  if (pathname === '/api/history' && method === 'DELETE') {
+    const p = query.get('path');
+    if (!p) return fail(res, 400, '缺少路径参数 path');
+    const removed = deleteHistory(p);
+    if (!removed) return fail(res, 404, '历史记录不存在');
+    return json(res, 200, { ok: true, removed, path: p });
   }
 
   /* ---- 扫描集合 ---- */

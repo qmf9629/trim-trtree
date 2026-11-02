@@ -447,6 +447,44 @@
       </div>
     </div>
 
+    <!-- ======================== 清除历史记录确认弹窗 ======================== -->
+    <div class="modal" id="confirm-history" hidden>
+      <div class="modal-backdrop" data-close="confirm-history"></div>
+      <div class="modal-card modal-card-sm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-history-title" aria-describedby="confirm-history-desc">
+        <header class="modal-head modal-head-danger">
+          <svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>
+          <h3 id="confirm-history-title">清除历史记录</h3>
+          <button class="icon-btn modal-close" type="button" data-close="confirm-history" title="关闭（Esc）">
+            <svg class="ic" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </header>
+        <div class="confirm-body">
+          <p class="confirm-lead" id="confirm-history-desc">只清除这条历史记录，磁盘上的文件不受影响。</p>
+          <div class="confirm-target">
+            <svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg>
+            <code id="confirm-history-path"></code>
+          </div>
+          <dl class="confirm-meta">
+            <div><dt>记录条数</dt><dd id="confirm-history-count">—</dd></div>
+            <div><dt>最近扫描</dt><dd id="confirm-history-time">—</dd></div>
+          </dl>
+          <p class="confirm-warn">
+            <svg class="ic" aria-hidden="true"><use href="#i-info"/></svg>
+            <span>清除后需要重新扫描才能再次看到该目录的分析结果，已导出的文件不受影响。</span>
+          </p>
+        </div>
+        <footer class="modal-foot">
+          <span class="confirm-status" id="confirm-history-status"></span>
+          <div class="modal-actions">
+            <button id="confirm-history-cancel" class="btn btn-ghost" type="button">取消</button>
+            <button id="confirm-history-delete" class="btn btn-danger" type="button">
+              <svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg><span>清除记录</span>
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
     <div class="toasts" id="toasts" aria-live="polite"></div>
   </div>
 

@@ -63,6 +63,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/volumes", s.handleVolumes)
 	m.HandleFunc("GET /api/browse", s.handleBrowse)
 	m.HandleFunc("GET /api/scans", s.handleListScans)
+	m.HandleFunc("DELETE /api/history", s.handleDeleteHistory)
 	m.HandleFunc("POST /api/scans", s.handleStartScan)
 	m.HandleFunc("GET /api/scans/{id}", s.handleGetScan)
 	m.HandleFunc("DELETE /api/scans/{id}", s.handleDeleteScan)

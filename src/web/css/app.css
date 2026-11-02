@@ -625,6 +625,15 @@ select.select option { background: var(--md-surface-container); color: var(--md-
 .recent-row.stale .recent-icon { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
 .recent-row.stale .recent-path { color: var(--md-on-surface-variant); }
 .recent-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+/* 历史行的清除按钮：平时压暗，悬停整行时浮现，避免列表显得杂乱 */
+.recent-del {
+  opacity: 0.45;
+  transition: opacity 0.15s var(--ease-std), color 0.15s var(--ease-std);
+}
+.recent-row:hover .recent-del,
+.recent-row:focus-within .recent-del { opacity: 1; }
+
 .recent-empty { padding: 24px; text-align: center; color: var(--md-on-surface-variant); font-size: 13px; }
 
 .readonly-note {

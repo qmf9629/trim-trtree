@@ -116,6 +116,14 @@ const dom = {
   confirmCancel: $('confirm-cancel'),
   confirmDelete: $('confirm-delete'),
 
+  confirmHistory: $('confirm-history'),
+  confirmHistoryPath: $('confirm-history-path'),
+  confirmHistoryCount: $('confirm-history-count'),
+  confirmHistoryTime: $('confirm-history-time'),
+  confirmHistoryStatus: $('confirm-history-status'),
+  confirmHistoryCancel: $('confirm-history-cancel'),
+  confirmHistoryDelete: $('confirm-history-delete'),
+
   viewError: $('view-error'),
   errorMessage: $('error-message'),
   errorBack: $('error-back'),
@@ -178,6 +186,8 @@ const state = {
   search: { q: '', kind: 'all', min: 0, total: 0, truncated: false, seq: 0 },
 
   del: { open: false, node: null, busy: false },
+  // 主页历史记录的清除确认
+  histDel: { open: false, path: '', count: 0, latest: 0, busy: false },
   hostSupport: null,
   isAdmin: true,
 
@@ -611,6 +621,19 @@ function renderRecentRow(group, index) {
     startScan(h.path);
   });
   actions.appendChild(again);
+
+  // 清除这条历史记录（按路径批量清理同一目录的历史）
+  const delHist = el('button', 'icon-btn row-act row-act-danger recent-del');
+  delHist.type = 'button';
+  delHist.title = '清除该路径的历史记录';
+  delHist.setAttribute('aria-label', delHist.title);
+  delHist.appendChild(icon('trash'));
+  delHist.addEventListener('click', (e) => {
+    e.stopPropagation();
+    askDeleteHistory(group);
+  });
+  actions.appendChild(delHist);
+
   row.appendChild(actions);
 
   if (stale) {
@@ -1766,6 +1789,81 @@ async function confirmDelete() {
   }
 }
 
+/* ---------------------- 主页历史记录：清除 ---------------------- */
+
+/** 打开清除历史记录的二次确认弹窗 */
+function askDeleteHistory(group) {
+  if (!group || !group.latest) return;
+  const latest = group.latest;
+  if (!latest.path) return;
+
+  state.histDel.open = true;
+  state.histDel.path = latest.path;
+  state.histDel.count = group.count || (group.items ? group.items.length : 1);
+  state.histDel.latest = latest.finishedAt || latest.startedAt || 0;
+  state.histDel.busy = false;
+
+  setText(dom.confirmHistoryPath, latest.path);
+  setText(dom.confirmHistoryCount, `${formatNumber(state.histDel.count)} 条`);
+  setText(dom.confirmHistoryTime, state.histDel.latest ? formatRelative(state.histDel.latest) : '—');
+  setText(dom.confirmHistoryStatus, '');
+  if (dom.confirmHistoryStatus) dom.confirmHistoryStatus.classList.remove('error');
+  if (dom.confirmHistoryDelete) {
+    dom.confirmHistoryDelete.disabled = false;
+    setText(dom.confirmHistoryDelete.querySelector('span'), '清除记录');
+  }
+  if (dom.confirmHistory) dom.confirmHistory.hidden = false;
+  window.setTimeout(() => { if (dom.confirmHistoryCancel) dom.confirmHistoryCancel.focus(); }, 30);
+}
+
+function closeDeleteHistory() {
+  if (state.histDel.busy) return;
+  state.histDel.open = false;
+  state.histDel.path = '';
+  if (dom.confirmHistory) dom.confirmHistory.hidden = true;
+}
+
+async function confirmDeleteHistory() {
+  const path = state.histDel.path;
+  if (!path || state.histDel.busy) return;
+  state.histDel.busy = true;
+  if (dom.confirmHistoryDelete) {
+    dom.confirmHistoryDelete.disabled = true;
+    setText(dom.confirmHistoryDelete.querySelector('span'), '清除中…');
+  }
+  setText(dom.confirmHistoryStatus, '正在清除，请稍候…');
+  if (dom.confirmHistoryStatus) dom.confirmHistoryStatus.classList.remove('error');
+
+  let removed = 0;
+  try {
+    const res = await api.deleteHistory(path);
+    removed = (res && res.removed) || 0;
+  } catch (err) {
+    state.histDel.busy = false;
+    if (dom.confirmHistoryDelete) {
+      dom.confirmHistoryDelete.disabled = false;
+      setText(dom.confirmHistoryDelete.querySelector('span'), '清除记录');
+    }
+    // 记录已经不存在时，直接当作清除完成，避免用户卡在过期的历史上
+    if (err && err.status === 404) {
+      removed = 0;
+    } else {
+      setText(dom.confirmHistoryStatus, err.message || '清除失败');
+      if (dom.confirmHistoryStatus) dom.confirmHistoryStatus.classList.add('error');
+      return;
+    }
+  }
+
+  state.histDel.busy = false;
+  state.histDel.open = false;
+  state.histDel.path = '';
+  if (dom.confirmHistory) dom.confirmHistory.hidden = true;
+
+  toast(removed > 0 ? `已清除 ${removed} 条历史记录` : '历史记录已清除', 'ok', 5000);
+  await refreshVolumes();
+  if (state.phase === 'empty') renderEmpty();
+}
+
 function updateBottomCount() {
   if (!dom.bottomCount) return;
   let text = '';
@@ -2312,6 +2410,15 @@ function bindEvents() {
     n.addEventListener('click', closeDelete);
   });
 
+  // 清除历史记录确认弹窗
+  if (dom.confirmHistory) {
+    dom.confirmHistoryCancel.addEventListener('click', closeDeleteHistory);
+    dom.confirmHistoryDelete.addEventListener('click', confirmDeleteHistory);
+    dom.confirmHistory.querySelectorAll('[data-close="confirm-history"]').forEach((n) => {
+      n.addEventListener('click', closeDeleteHistory);
+    });
+  }
+
   // 错误视图
   dom.errorBack.addEventListener('click', showEmptyView);
   dom.errorRetry.addEventListener('click', () => {
@@ -2345,6 +2452,7 @@ function bindEvents() {
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
 
     if (e.key === 'Escape') {
+      if (state.histDel.open) { closeDeleteHistory(); return; }
       if (state.del.open) { closeDelete(); return; }
       if (!dom.picker.hidden) closePicker('browse');
       closeExportMenu();

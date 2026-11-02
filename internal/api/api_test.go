@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -494,4 +495,130 @@ func TestOpenEndpoint(t *testing.T) {
 
 func itoa(n int) string {
 	return strconv.FormatInt(int64(n), 10)
+}
+
+// ---------- 历史记录删除 ----------
+
+func historyPaths(t *testing.T, ts *httptest.Server) []string {
+	t.Helper()
+	var vols struct {
+		History []Summary `json:"history"`
+	}
+	getJSON(t, ts.URL+"/api/volumes", &vols)
+	out := make([]string, 0, len(vols.History))
+	for _, h := range vols.History {
+		out = append(out, h.Path)
+	}
+	return out
+}
+
+// waitHistory 等待历史记录写入（扫描结束后到写历史之间有一个很短的时间窗）。
+func waitHistory(t *testing.T, ts *httptest.Server, path string, want int) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		n := 0
+		for _, p := range historyPaths(t, ts) {
+			if p == path {
+				n++
+			}
+		}
+		if n >= want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("等不到 %d 条 %s 的历史记录，当前 %v", want, path, historyPaths(t, ts))
+}
+
+func TestDeleteHistory(t *testing.T) {
+	ts, dir := testServer(t, true)
+	root := filepath.Join(dir, "hroot")
+	os.MkdirAll(filepath.Join(root, "sub"), 0o755)
+	os.WriteFile(filepath.Join(root, "a.txt"), make([]byte, 100), 0o644)
+	os.WriteFile(filepath.Join(root, "sub", "b.bin"), make([]byte, 50), 0o644)
+
+	// 同一路径扫两次，确认一次删除会清掉该路径下的全部记录
+	startTestScan(t, ts, root)
+	waitHistory(t, ts, root, 1)
+	startTestScan(t, ts, root)
+	waitHistory(t, ts, root, 2)
+
+	if got := historyPaths(t, ts); len(got) != 2 {
+		t.Fatalf("历史条数 = %d, want 2 (%v)", len(got), got)
+	}
+
+	// 尾斜杠也应能匹配
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/history?path="+url.QueryEscape(root+"/"), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var del struct {
+		OK      bool `json:"ok"`
+		Removed int  `json:"removed"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&del); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !del.OK || del.Removed != 2 {
+		t.Fatalf("delete history status=%d ok=%v removed=%d, want 200/true/2",
+			resp.StatusCode, del.OK, del.Removed)
+	}
+
+	// 接口层面已经没有了
+	for _, p := range historyPaths(t, ts) {
+		if normalizeHistoryPath(p) == normalizeHistoryPath(root) {
+			t.Fatalf("删除后仍存在历史记录：%s", p)
+		}
+	}
+
+	// 落地文件也必须同步（重启后不能复活）
+	raw, err := os.ReadFile(filepath.Join(dir, "data", "history.json"))
+	if err != nil {
+		t.Fatalf("读取 history.json: %v", err)
+	}
+	if strings.Contains(string(raw), root) {
+		t.Fatalf("history.json 仍包含已删除路径：%s", raw)
+	}
+
+	// 再删一次应当 404
+	req2, _ := http.NewRequest("DELETE", ts.URL+"/api/history?path="+url.QueryEscape(root), nil)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("重复删除 status = %d, want 404", resp2.StatusCode)
+	}
+}
+
+func TestDeleteHistoryBadRequest(t *testing.T) {
+	ts, _ := testServer(t, true)
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/history", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("缺少 path 时 status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestNormalizeHistoryPath(t *testing.T) {
+	tests := map[string]string{
+		"/vol1/1000":    "/vol1/1000",
+		"/vol1/1000/":   "/vol1/1000",
+		"/vol1/1000///": "/vol1/1000",
+		"/":             "/",
+		"  /vol2/a  ":   "/vol2/a",
+		"":              "",
+	}
+	for in, want := range tests {
+		if got := normalizeHistoryPath(in); got != want {
+			t.Errorf("normalizeHistoryPath(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

@@ -119,6 +119,11 @@ export const api = {
     return request('scans/' + encodeURIComponent(id), { method: 'DELETE' });
   },
 
+  /** 清除某个路径的历史扫描记录，返回 { ok, removed, path } */
+  deleteHistory(path) {
+    return request('history', { method: 'DELETE', params: { path } });
+  },
+
   tree(id, params = {}) {
     return request('scans/' + encodeURIComponent(id) + '/tree', { params });
   },
